@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>32x32 Dot Canvas Test</title>
+    <title>32x32 Pinch Zoom Dot Editor</title>
     <style>
         * {
             box-sizing: border-box;
@@ -22,6 +22,7 @@
             min-height: 100vh;
             margin: 0;
             padding: 15px;
+            overflow: hidden; /* 줌 동작 시 브라우저 바운스 방지 */
         }
         .card {
             background-color: #1e1e1e;
@@ -29,7 +30,7 @@
             border-radius: 16px;
             box-shadow: 0 8px 24px rgba(0,0,0,0.5);
             width: 100%;
-            max-width: 340px;
+            max-width: 350px;
             text-align: center;
         }
         h2 {
@@ -38,19 +39,23 @@
             color: #ffffff;
         }
         
-        /* 32x32 도트 캔버스 컨테이너 */
-        .dot-editor-container {
+        /* 뷰포트 (확대/축소 영역을 감싸는 틀) */
+        .canvas-viewport {
+            width: 280px;
+            height: 280px;
+            background: #111;
+            border: 2px solid #444;
+            border-radius: 8px;
+            overflow: hidden;
+            margin: 10px auto;
+            position: relative;
+            touch-action: none;
             display: flex;
-            flex-direction: column;
             align-items: center;
-            background: #282828;
-            padding: 12px;
-            border-radius: 12px;
-            margin: 15px 0;
-            width: 100%;
+            justify-content: center;
         }
-        
-        /* CSS Grid 명확한 규격 지정 */
+
+        /* 실제로 Transform(확대/이동)이 적용될 캔버스 모듈 */
         .dot-canvas {
             display: grid;
             grid-template-columns: repeat(32, 1fr);
@@ -59,10 +64,9 @@
             height: 256px;
             min-width: 256px;
             min-height: 256px;
-            border: 2px solid #555;
             background-color: #000;
-            touch-action: none; /* 모바일 화면 스크롤 절대 방지 */
-            margin: 0 auto;
+            transform-origin: center center;
+            will-change: transform;
         }
 
         .pixel {
@@ -79,15 +83,17 @@
 
         .editor-tools {
             display: flex;
-            gap: 8px;
-            width: 256px;
-            margin-top: 12px;
+            flex-wrap: wrap;
+            gap: 6px;
+            width: 100%;
+            margin-top: 10px;
         }
         
         .btn {
             flex: 1;
-            padding: 12px 0;
-            font-size: 13px;
+            min-width: 80px;
+            padding: 10px 0;
+            font-size: 12px;
             font-weight: bold;
             background: #3a3a3a;
             border: 1px solid #555;
@@ -100,30 +106,36 @@
             border-color: #0088ff;
         }
 
-        #pixelCount {
-            margin-top: 10px;
-            font-size: 13px;
+        .info-bar {
+            margin-top: 8px;
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
             color: #00ff66;
             font-family: monospace;
+            padding: 0 5px;
         }
     </style>
 </head>
 <body>
 
 <div class="card">
-    <h2>32x32 터치 드로잉 테스트</h2>
+    <h2>32x32 줌인/줌아웃 도트 에디터</h2>
     
-    <div class="dot-editor-container">
-        <!-- 32x32 그리드 캔버스 -->
+    <div class="canvas-viewport" id="viewport">
         <div id="dotCanvas" class="dot-canvas"></div>
-        
-        <div class="editor-tools">
-            <button id="modeBtn" class="btn" onclick="toggleMode()">✏️ 펜 모드</button>
-            <button class="btn" onclick="clearCanvas()">🗑️ 전체 지우기</button>
-        </div>
+    </div>
+    
+    <div class="editor-tools">
+        <button id="modeBtn" class="btn" onclick="toggleMode()">✏️ 펜 모드</button>
+        <button class="btn" onclick="resetZoom()">🔍 위치 리셋</button>
+        <button class="btn" onclick="clearCanvas()">🗑️ 전체 지우기</button>
     </div>
 
-    <div id="pixelCount">켜진 픽셀 수: 0 / 1024</div>
+    <div class="info-bar">
+        <span id="zoomLevel">배율: 1.0x</span>
+        <span id="pixelCount">도트: 0 / 1024</span>
+    </div>
 </div>
 
 <script>
@@ -131,10 +143,19 @@
     let isDrawing = false;
     let isEraseMode = false;
 
+    // Zoom & Pan 제어 변수
+    let scale = 1;
+    let pointX = 0;
+    let pointY = 0;
+    let startDist = 0;
+    let isPinching = false;
+    let startTouchX = 0;
+    let startTouchY = 0;
+
+    const canvas = document.getElementById('dotCanvas');
+    const viewport = document.getElementById('viewport');
+
     function buildCanvas() {
-        const canvas = document.getElementById('dotCanvas');
-        if (!canvas) return;
-        
         canvas.innerHTML = '';
         const fragment = document.createDocumentFragment();
 
@@ -149,7 +170,7 @@
         }
         canvas.appendChild(fragment);
 
-        // PC 마우스 이벤트
+        // PC 마우스 드래그
         canvas.addEventListener('mousedown', (e) => {
             isDrawing = true;
             drawSingle(e.target);
@@ -159,28 +180,90 @@
             if (isDrawing) drawSingle(e.target);
         });
 
-        // 모바일 터치 이벤트 (elementFromPoint 사용으로 연속 드래그 완벽 감지)
-        canvas.addEventListener('touchstart', (e) => {
-            isDrawing = true;
-            handleTouch(e);
-        }, { passive: false });
-
-        canvas.addEventListener('touchmove', (e) => {
-            if (isDrawing) handleTouch(e);
-        }, { passive: false });
-
-        window.addEventListener('touchend', () => { isDrawing = false; });
+        // 모바일 멀티 터치 (그리기 + 핀치 줌)
+        viewport.addEventListener('touchstart', handleTouchStart, { passive: false });
+        viewport.addEventListener('touchmove', handleTouchMove, { passive: false });
+        viewport.addEventListener('touchend', handleTouchEnd);
     }
 
-    function handleTouch(e) {
-        if (e.touches && e.touches.length > 0) {
-            e.preventDefault();
+    // 터치 시작
+    function handleTouchStart(e) {
+        if (e.touches.length === 1) {
+            // 한 손가락: 그리기
+            isPinching = false;
+            isDrawing = true;
+            const target = document.elementFromPoint(e.touches[0].clientX, e.touches[0].clientY);
+            drawSingle(target);
+        } else if (e.touches.length === 2) {
+            // 두 손가락: 줌/이동 (핀치 줌 모드 진입)
+            isDrawing = false;
+            isPinching = true;
+            startDist = getDistance(e.touches);
+            startTouchX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - pointX;
+            startTouchY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - pointY;
+        }
+    }
+
+    // 터치 이동
+    function handleTouchMove(e) {
+        e.preventDefault();
+        
+        if (isDrawing && e.touches.length === 1) {
+            // 1손가락: 드로잉
             const touch = e.touches[0];
             const target = document.elementFromPoint(touch.clientX, touch.clientY);
-            if (target && target.classList.contains('pixel')) {
-                drawSingle(target);
-            }
+            drawSingle(target);
+        } else if (isPinching && e.touches.length === 2) {
+            // 2손가락: 핀치 줌 & 패닝(이동)
+            const newDist = getDistance(e.touches);
+            const factor = newDist / startDist;
+            startDist = newDist;
+
+            // 배율 제한 (1배 ~ 4.5배)
+            scale = Math.min(Math.max(1, scale * factor), 4.5);
+
+            // 이동 좌표 계산
+            const currentX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+            const currentY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+            pointX = currentX - startTouchX;
+            pointY = currentY - startTouchY;
+
+            updateTransform();
         }
+    }
+
+    function handleTouchEnd(e) {
+        if (e.touches.length < 2) {
+            isPinching = false;
+        }
+        if (e.touches.length === 0) {
+            isDrawing = false;
+        }
+    }
+
+    // 두 손가락 사이 거리 계산
+    function getDistance(touches) {
+        return Math.hypot(
+            touches[0].clientX - touches[1].clientX,
+            touches[0].clientY - touches[1].clientY
+        );
+    }
+
+    // CSS Transform 업데이트
+    function updateTransform() {
+        if (scale === 1) {
+            pointX = 0;
+            pointY = 0;
+        }
+        canvas.style.transform = `translate(${pointX}px, ${pointY}px) scale(${scale})`;
+        document.getElementById('zoomLevel').innerText = `배율: ${scale.toFixed(1)}x`;
+    }
+
+    function resetZoom() {
+        scale = 1;
+        pointX = 0;
+        pointY = 0;
+        updateTransform();
     }
 
     function drawSingle(target) {
@@ -204,7 +287,7 @@
         isEraseMode = !isEraseMode;
         const btn = document.getElementById('modeBtn');
         if (isEraseMode) {
-            btn.innerText = "🧹 지우개 모드";
+            btn.innerText = "🧹 지우개";
             btn.classList.add('active-mode');
         } else {
             btn.innerText = "✏️ 펜 모드";
@@ -214,8 +297,7 @@
 
     function clearCanvas() {
         dotMatrix = Array(32).fill().map(() => Array(32).fill(0));
-        const pixels = document.querySelectorAll('.pixel');
-        pixels.forEach(p => p.classList.remove('active'));
+        document.querySelectorAll('.pixel').forEach(p => p.classList.remove('active'));
         updateCount();
     }
 
@@ -226,16 +308,15 @@
                 if (dotMatrix[y][x] === 1) activeCount++;
             }
         }
-        document.getElementById('pixelCount').innerText = `켜진 픽셀 수: ${activeCount} / 1024`;
+        document.getElementById('pixelCount').innerText = `도트: ${activeCount} / 1024`;
     }
 
-    // DOM로드 시 및 즉시 실행 보장
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', buildCanvas);
-    } else {
-        buildCanvas();
-    }
+    buildCanvas();
 </script>
 
 </body>
 </html>
+         
+     
+    
+   
