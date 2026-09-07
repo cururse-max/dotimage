@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>32x32 Dot Editor with Battery Guide</title>
+    <title>SmartRing Clock & Custom Dot Sync</title>
     <style>
         * {
             box-sizing: border-box;
@@ -33,13 +33,9 @@
             max-width: 350px;
             text-align: center;
         }
-        h2 {
-            margin-top: 0;
-            font-size: 18px;
-            color: #ffffff;
-        }
+        h2 { margin-top: 0; font-size: 18px; color: #ffffff; }
+        .clock { font-size: 28px; font-weight: bold; color: #00e5ff; margin: 5px 0 10px 0; }
         
-        /* 뷰포트 (확대/축소 영역) */
         .canvas-viewport {
             width: 280px;
             height: 280px;
@@ -55,7 +51,6 @@
             justify-content: center;
         }
 
-        /* 32x32 캔버스 레이아웃 */
         .dot-canvas {
             display: grid;
             grid-template-columns: repeat(32, 1fr);
@@ -67,38 +62,34 @@
             background-color: #000;
             transform-origin: center center;
             will-change: transform;
-            position: relative;
         }
 
         .pixel {
             border: 0.5px solid #1a1a1a;
             background-color: #050505;
-            width: 100%;
-            height: 100%;
+            width: 100%; height: 100%;
         }
 
-        /* 켜진 픽셀 색상: 흰색 (#FFFFFF) */
         .pixel.active {
             background-color: #ffffff !important;
             box-shadow: 0 0 3px #ffffff;
         }
 
-        /* 배터리 잔량 25% 단위 (8px 간격) 가로 점선 구부선 */
-        .pixel[data-y="7"] { border-bottom: 1.5px dashed #ff9800 !important; }  /* 75% 높이 라인 */
-        .pixel[data-y="15"] { border-bottom: 1.5px dashed #ff9800 !important; } /* 50% 높이 라인 */
-        .pixel[data-y="23"] { border-bottom: 1.5px dashed #ff9800 !important; } /* 25% 높이 라인 */
+        .pixel[data-y="7"], .pixel[data-y="15"], .pixel[data-y="23"] {
+            border-bottom: 1.5px dashed #ff9800 !important;
+        }
 
         .editor-tools {
             display: flex;
             flex-wrap: wrap;
             gap: 6px;
             width: 100%;
-            margin-top: 10px;
+            margin-top: 8px;
         }
         
         .btn {
             flex: 1;
-            min-width: 80px;
+            min-width: 75px;
             padding: 10px 0;
             font-size: 12px;
             font-weight: bold;
@@ -108,33 +99,40 @@
             border-radius: 8px;
             cursor: pointer;
         }
-        .btn.active-mode {
-            background: #0066cc;
-            border-color: #0088ff;
-        }
+        .btn-action { width: 100%; margin-top: 8px; padding: 12px 0; font-size: 14px; }
+        .btn-primary { background: #0066cc; border-color: #0088ff; }
+        .btn-success { background: #28a745; border-color: #34ce57; }
+        .btn-disabled { background: #444; color: #888; border-color: #555; cursor: not-allowed; }
+        .btn.active-mode { background: #0066cc; border-color: #0088ff; }
 
         .info-bar {
-            margin-top: 10px;
+            margin-top: 8px;
             display: flex;
             justify-content: space-between;
-            font-size: 12px;
+            font-size: 11px;
             color: #00ff66;
             font-family: monospace;
-            padding: 0 5px;
         }
 
-        .guide-label {
+        #log {
+            margin-top: 10px;
+            padding: 8px;
+            background-color: #000;
+            border-radius: 6px;
+            color: #00ff66;
+            font-family: monospace;
             font-size: 11px;
-            color: #ff9800;
-            margin-top: 4px;
+            text-align: left;
+            height: 50px;
+            overflow-y: auto;
         }
     </style>
 </head>
 <body>
 
 <div class="card">
-    <h2>32x32 커스텀 도트 에디터</h2>
-    <div class="guide-label">주황색 점선: 배터리 25% / 50% / 75% 가이드</div>
+    <h2>SmartRing Controller</h2>
+    <div class="clock" id="phoneClock">00:00:00</div>
 
     <div class="canvas-viewport" id="viewport">
         <div id="dotCanvas" class="dot-canvas"></div>
@@ -142,7 +140,7 @@
     
     <div class="editor-tools">
         <button id="modeBtn" class="btn" onclick="toggleMode()">✏️ 펜 모드</button>
-        <button class="btn" onclick="resetZoom()">🔍 위치 리셋</button>
+        <button class="btn" onclick="resetZoom()">🔍 줌 리셋</button>
         <button class="btn" onclick="clearCanvas()">🗑️ 전체 지우기</button>
     </div>
 
@@ -150,24 +148,40 @@
         <span id="zoomLevel">배율: 1.0x</span>
         <span id="pixelCount">도트: 0 / 1024</span>
     </div>
+
+    <!-- BLE 동작 버튼 -->
+    <button id="connectBtn" class="btn btn-action btn-primary" onclick="connectBLE()">1. 스마트링 연결하기</button>
+    <button id="syncBtn" class="btn btn-action btn-disabled" onclick="syncData()" disabled>2. 시간 및 커스텀 도트 전송</button>
+
+    <div id="log">> 상태: 대기 중...</div>
 </div>
 
 <script>
+    const SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+    const CHARACTERISTIC_UUID_RX = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
+
+    let bleDevice = null;
+    let rxCharacteristic = null;
+
     let dotMatrix = Array(32).fill().map(() => Array(32).fill(0));
     let isDrawing = false;
     let isEraseMode = false;
 
-    // Zoom & Pan 제어 변수
-    let scale = 1;
-    let pointX = 0;
-    let pointY = 0;
-    let startDist = 0;
-    let isPinching = false;
-    let startTouchX = 0;
-    let startTouchY = 0;
+    let scale = 1, pointX = 0, pointY = 0, startDist = 0;
+    let isPinching = false, startTouchX = 0, startTouchY = 0;
 
     const canvas = document.getElementById('dotCanvas');
     const viewport = document.getElementById('viewport');
+
+    function updateClock() {
+        const now = new Date();
+        const hrs = String(now.getHours()).padStart(2, '0');
+        const mins = String(now.getMinutes()).padStart(2, '0');
+        const secs = String(now.getSeconds()).padStart(2, '0');
+        document.getElementById('phoneClock').innerText = `${hrs}:${mins}:${secs}`;
+    }
+    setInterval(updateClock, 1000);
+    updateClock();
 
     function buildCanvas() {
         canvas.innerHTML = '';
@@ -184,17 +198,10 @@
         }
         canvas.appendChild(fragment);
 
-        // PC 마우스
-        canvas.addEventListener('mousedown', (e) => {
-            isDrawing = true;
-            drawSingle(e.target);
-        });
+        canvas.addEventListener('mousedown', (e) => { isDrawing = true; drawSingle(e.target); });
         window.addEventListener('mouseup', () => { isDrawing = false; });
-        canvas.addEventListener('mousemove', (e) => {
-            if (isDrawing) drawSingle(e.target);
-        });
+        canvas.addEventListener('mousemove', (e) => { if (isDrawing) drawSingle(e.target); });
 
-        // 모바일 터치 (핀치 줌 & 드로잉)
         viewport.addEventListener('touchstart', handleTouchStart, { passive: false });
         viewport.addEventListener('touchmove', handleTouchMove, { passive: false });
         viewport.addEventListener('touchend', handleTouchEnd);
@@ -202,13 +209,10 @@
 
     function handleTouchStart(e) {
         if (e.touches.length === 1) {
-            isPinching = false;
-            isDrawing = true;
-            const target = document.elementFromPoint(e.touches[0].clientX, e.touches[0].clientY);
-            drawSingle(target);
+            isPinching = false; isDrawing = true;
+            drawSingle(document.elementFromPoint(e.touches[0].clientX, e.touches[0].clientY));
         } else if (e.touches.length === 2) {
-            isDrawing = false;
-            isPinching = true;
+            isDrawing = false; isPinching = true;
             startDist = getDistance(e.touches);
             startTouchX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - pointX;
             startTouchY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - pointY;
@@ -217,23 +221,14 @@
 
     function handleTouchMove(e) {
         e.preventDefault();
-        
         if (isDrawing && e.touches.length === 1) {
-            const touch = e.touches[0];
-            const target = document.elementFromPoint(touch.clientX, touch.clientY);
-            drawSingle(target);
+            drawSingle(document.elementFromPoint(e.touches[0].clientX, e.touches[0].clientY));
         } else if (isPinching && e.touches.length === 2) {
             const newDist = getDistance(e.touches);
-            const factor = newDist / startDist;
+            scale = Math.min(Math.max(1, scale * (newDist / startDist)), 4.5);
             startDist = newDist;
-
-            scale = Math.min(Math.max(1, scale * factor), 4.5);
-
-            const currentX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
-            const currentY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
-            pointX = currentX - startTouchX;
-            pointY = currentY - startTouchY;
-
+            pointX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - startTouchX;
+            pointY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - startTouchY;
             updateTransform();
         }
     }
@@ -244,41 +239,26 @@
     }
 
     function getDistance(touches) {
-        return Math.hypot(
-            touches[0].clientX - touches[1].clientX,
-            touches[0].clientY - touches[1].clientY
-        );
+        return Math.hypot(touches[0].clientX - touches[1].clientX, touches[0].clientY - touches[1].clientY);
     }
 
     function updateTransform() {
-        if (scale === 1) {
-            pointX = 0;
-            pointY = 0;
-        }
+        if (scale === 1) { pointX = 0; pointY = 0; }
         canvas.style.transform = `translate(${pointX}px, ${pointY}px) scale(${scale})`;
         document.getElementById('zoomLevel').innerText = `배율: ${scale.toFixed(1)}x`;
     }
 
-    function resetZoom() {
-        scale = 1;
-        pointX = 0;
-        pointY = 0;
-        updateTransform();
-    }
+    function resetZoom() { scale = 1; pointX = 0; pointY = 0; updateTransform(); }
 
     function drawSingle(target) {
         if (!target || !target.classList.contains('pixel')) return;
         const x = parseInt(target.dataset.x, 10);
         const y = parseInt(target.dataset.y, 10);
-        
         const val = isEraseMode ? 0 : 1;
         if (dotMatrix[y][x] !== val) {
             dotMatrix[y][x] = val;
-            if (val === 1) {
-                target.classList.add('active');
-            } else {
-                target.classList.remove('active');
-            }
+            if (val === 1) target.classList.add('active');
+            else target.classList.remove('active');
             updateCount();
         }
     }
@@ -286,13 +266,9 @@
     function toggleMode() {
         isEraseMode = !isEraseMode;
         const btn = document.getElementById('modeBtn');
-        if (isEraseMode) {
-            btn.innerText = "🧹 지우개";
-            btn.classList.add('active-mode');
-        } else {
-            btn.innerText = "✏️ 펜 모드";
-            btn.classList.remove('active-mode');
-        }
+        btn.innerText = isEraseMode ? "🧹 지우개" : "✏️ 펜 모드";
+        if (isEraseMode) btn.classList.add('active-mode');
+        else btn.classList.remove('active-mode');
     }
 
     function clearCanvas() {
@@ -304,12 +280,74 @@
     function updateCount() {
         let activeCount = 0;
         for (let y = 0; y < 32; y++) {
-            for (let x = 0; x < 32; x++) {
-                if (dotMatrix[y][x] === 1) activeCount++;
-            }
+            for (let x = 0; x < 32; x++) if (dotMatrix[y][x] === 1) activeCount++;
         }
         document.getElementById('pixelCount').innerText = `도트: ${activeCount} / 1024`;
     }
+
+    // 128바이트 비트맵 인코딩
+    function get32x32BitmapBytes() {
+        let bytes = new Uint8Array(128);
+        for (let y = 0; y < 32; y++) {
+            for (let x = 0; x < 32; x++) {
+                if (dotMatrix[y][x] === 1) {
+                    let byteIdx = (y * 4) + Math.floor(x / 8);
+                    let bitIdx = 7 - (x % 8);
+                    bytes[byteIdx] |= (1 << bitIdx);
+                }
+            }
+        }
+        return bytes;
+    }
+
+    // BLE 연결
+    async function connectBLE() {
+        log("스마트링 검색 중...");
+        try {
+            bleDevice = await navigator.bluetooth.requestDevice({
+                filters: [{ name: 'SmartRing_Clock' }],
+                optionalServices: [SERVICE_UUID]
+            });
+            const server = await bleDevice.gatt.connect();
+            const service = await server.getPrimaryService(SERVICE_UUID);
+            rxCharacteristic = await service.getCharacteristic(CHARACTERISTIC_UUID_RX);
+
+            log("연결 성공!");
+            const syncBtn = document.getElementById('syncBtn');
+            syncBtn.disabled = false;
+            syncBtn.className = "btn btn-action btn-success";
+        } catch (error) {
+            log("연결 실패: " + error.message);
+        }
+    }
+
+    // 시간 & 비트맵 데이터 분할 전송
+    async function syncData() {
+        if (!rxCharacteristic) return;
+        try {
+            const now = new Date();
+            const timeStr = `T:${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
+            await rxCharacteristic.writeValue((new TextEncoder()).encode(timeStr));
+            log("시간 전송 완료!");
+
+            const bitmap = get32x32BitmapBytes();
+            for (let i = 0; i < 128; i += 32) {
+                const chunk = bitmap.slice(i, i + 32);
+                const packet = new Uint8Array(2 + chunk.length);
+                packet[0] = 66; // ASCII 'B' (Bitmap Packet)
+                packet[1] = i;  // Chunk Offset Index (0, 32, 64, 96)
+                packet.set(chunk, 2);
+                
+                await rxCharacteristic.writeValue(packet);
+                await new Promise(r => setTimeout(r, 60));
+            }
+            log("동기화 완벽 완료!");
+        } catch (error) {
+            log("전송 오류: " + error.message);
+        }
+    }
+
+    function log(msg) { document.getElementById('log').innerText = "> " + msg; }
 
     buildCanvas();
 </script>
