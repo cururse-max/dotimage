@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>32x32 Pinch Zoom Dot Editor</title>
+    <title>32x32 Dot Editor with Battery Guide</title>
     <style>
         * {
             box-sizing: border-box;
@@ -22,7 +22,7 @@
             min-height: 100vh;
             margin: 0;
             padding: 15px;
-            overflow: hidden; /* 줌 동작 시 브라우저 바운스 방지 */
+            overflow: hidden;
         }
         .card {
             background-color: #1e1e1e;
@@ -39,7 +39,7 @@
             color: #ffffff;
         }
         
-        /* 뷰포트 (확대/축소 영역을 감싸는 틀) */
+        /* 뷰포트 (확대/축소 영역) */
         .canvas-viewport {
             width: 280px;
             height: 280px;
@@ -55,7 +55,7 @@
             justify-content: center;
         }
 
-        /* 실제로 Transform(확대/이동)이 적용될 캔버스 모듈 */
+        /* 32x32 캔버스 레이아웃 */
         .dot-canvas {
             display: grid;
             grid-template-columns: repeat(32, 1fr);
@@ -67,6 +67,7 @@
             background-color: #000;
             transform-origin: center center;
             will-change: transform;
+            position: relative;
         }
 
         .pixel {
@@ -76,10 +77,16 @@
             height: 100%;
         }
 
+        /* 켜진 픽셀 색상: 흰색 (#FFFFFF) */
         .pixel.active {
-            background-color: #00e5ff !important;
-            box-shadow: 0 0 2px #00e5ff;
+            background-color: #ffffff !important;
+            box-shadow: 0 0 3px #ffffff;
         }
+
+        /* 배터리 잔량 25% 단위 (8px 간격) 가로 점선 구부선 */
+        .pixel[data-y="7"] { border-bottom: 1.5px dashed #ff9800 !important; }  /* 75% 높이 라인 */
+        .pixel[data-y="15"] { border-bottom: 1.5px dashed #ff9800 !important; } /* 50% 높이 라인 */
+        .pixel[data-y="23"] { border-bottom: 1.5px dashed #ff9800 !important; } /* 25% 높이 라인 */
 
         .editor-tools {
             display: flex;
@@ -107,7 +114,7 @@
         }
 
         .info-bar {
-            margin-top: 8px;
+            margin-top: 10px;
             display: flex;
             justify-content: space-between;
             font-size: 12px;
@@ -115,13 +122,20 @@
             font-family: monospace;
             padding: 0 5px;
         }
+
+        .guide-label {
+            font-size: 11px;
+            color: #ff9800;
+            margin-top: 4px;
+        }
     </style>
 </head>
 <body>
 
 <div class="card">
-    <h2>32x32 줌인/줌아웃 도트 에디터</h2>
-    
+    <h2>32x32 커스텀 도트 에디터</h2>
+    <div class="guide-label">주황색 점선: 배터리 25% / 50% / 75% 가이드</div>
+
     <div class="canvas-viewport" id="viewport">
         <div id="dotCanvas" class="dot-canvas"></div>
     </div>
@@ -170,7 +184,7 @@
         }
         canvas.appendChild(fragment);
 
-        // PC 마우스 드래그
+        // PC 마우스
         canvas.addEventListener('mousedown', (e) => {
             isDrawing = true;
             drawSingle(e.target);
@@ -180,22 +194,19 @@
             if (isDrawing) drawSingle(e.target);
         });
 
-        // 모바일 멀티 터치 (그리기 + 핀치 줌)
+        // 모바일 터치 (핀치 줌 & 드로잉)
         viewport.addEventListener('touchstart', handleTouchStart, { passive: false });
         viewport.addEventListener('touchmove', handleTouchMove, { passive: false });
         viewport.addEventListener('touchend', handleTouchEnd);
     }
 
-    // 터치 시작
     function handleTouchStart(e) {
         if (e.touches.length === 1) {
-            // 한 손가락: 그리기
             isPinching = false;
             isDrawing = true;
             const target = document.elementFromPoint(e.touches[0].clientX, e.touches[0].clientY);
             drawSingle(target);
         } else if (e.touches.length === 2) {
-            // 두 손가락: 줌/이동 (핀치 줌 모드 진입)
             isDrawing = false;
             isPinching = true;
             startDist = getDistance(e.touches);
@@ -204,25 +215,20 @@
         }
     }
 
-    // 터치 이동
     function handleTouchMove(e) {
         e.preventDefault();
         
         if (isDrawing && e.touches.length === 1) {
-            // 1손가락: 드로잉
             const touch = e.touches[0];
             const target = document.elementFromPoint(touch.clientX, touch.clientY);
             drawSingle(target);
         } else if (isPinching && e.touches.length === 2) {
-            // 2손가락: 핀치 줌 & 패닝(이동)
             const newDist = getDistance(e.touches);
             const factor = newDist / startDist;
             startDist = newDist;
 
-            // 배율 제한 (1배 ~ 4.5배)
             scale = Math.min(Math.max(1, scale * factor), 4.5);
 
-            // 이동 좌표 계산
             const currentX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
             const currentY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
             pointX = currentX - startTouchX;
@@ -233,15 +239,10 @@
     }
 
     function handleTouchEnd(e) {
-        if (e.touches.length < 2) {
-            isPinching = false;
-        }
-        if (e.touches.length === 0) {
-            isDrawing = false;
-        }
+        if (e.touches.length < 2) isPinching = false;
+        if (e.touches.length === 0) isDrawing = false;
     }
 
-    // 두 손가락 사이 거리 계산
     function getDistance(touches) {
         return Math.hypot(
             touches[0].clientX - touches[1].clientX,
@@ -249,7 +250,6 @@
         );
     }
 
-    // CSS Transform 업데이트
     function updateTransform() {
         if (scale === 1) {
             pointX = 0;
@@ -316,7 +316,3 @@
 
 </body>
 </html>
-         
-     
-    
-   
